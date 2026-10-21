@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Transcript Timing Reconciler - Courtroom Caption Engine</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --border: #e2e8f0;
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --success: #16a34a;
+      --danger: #dc2626;
+      --warning: #d97706;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: var(--bg); color: var(--text); padding: 20px; line-height: 1.5; }
+    .container { max-width: 1400px; margin: 0 auto; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid var(--border); padding-bottom: 12px; }
+    h1 { font-size: 1.5rem; font-weight: 700; color: #1e293b; }
+    .subtitle { font-size: 0.88rem; color: var(--text-muted); }
+
+    /* Grid Layout */
+    .dashboard-grid { display: grid; grid-template-columns: 340px 1fr; gap: 20px; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .card-title { font-size: 1rem; font-weight: 600; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+
+    /* Connection State Badge */
+    .status-badge { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 20px; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; }
+    .state-disconnected { background: #fee2e2; color: #991b1b; }
+    .state-connected { background: #dbeafe; color: #1e40af; }
+    .state-receiving { background: #dcfce7; color: #166534; animation: pulse 1.5s infinite; }
+    .state-done { background: #d1fae5; color: #065f46; }
+    .state-dropped { background: #fee2e2; color: #b91c1c; font-weight: 800; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+    /* Metric Rows */
+    .metric-row { display: flex; justify-content: space-between; font-size: 0.88rem; padding: 6px 0; border-bottom: 1px dotted #f1f5f9; }
+    .metric-label { color: var(--text-muted); }
+    .metric-val { font-weight: 600; font-family: monospace; }
+    .progress-bar { background: #e2e8f0; border-radius: 4px; height: 8px; overflow: hidden; margin-top: 4px; margin-bottom: 8px; }
+    .progress-fill { background: var(--primary); height: 100%; width: 0%; transition: width 0.3s; }
+
+    /* Controls */
+    .btn { display: inline-block; width: 100%; padding: 10px; border: none; border-radius: 6px; font-size: 0.9rem; font-weight: 600; cursor: pointer; text-align: center; transition: background 0.2s; margin-bottom: 8px; }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-secondary { background: #f1f5f9; color: #334155; border: 1px solid var(--border); }
+    .btn-secondary:hover { background: #e2e8f0; }
+    .btn-danger { background: #fef2f2; color: var(--danger); border: 1px solid #fecaca; }
+    .btn-danger:hover { background: #fee2e2; }
+    .control-group { margin-bottom: 12px; }
+    .control-label { font-size: 0.82rem; font-weight: 600; color: #475569; display: block; margin-bottom: 4px; }
+    select, input { width: 100%; padding: 7px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.88rem; }
+
+    /* Transcript Viewer */
+    .transcript-container { height: calc(100vh - 160px); display: flex; flex-direction: column; }
+    .transcript-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .transcript-body { flex: 1; overflow-y: auto; background: #ffffff; border: 1px solid var(--border); border-radius: 6px; padding: 18px; font-size: 1.05rem; line-height: 1.8; word-wrap: break-word; }
+    
+    /* Word Styling */
+    .word-token { display: inline-block; margin: 1px 2px; padding: 1px 4px; border-radius: 4px; cursor: pointer; transition: background 0.15s; font-family: Georgia, serif; position: relative; }
+    .word-token:hover { background: #fef08a !important; color: black; outline: 1px solid #ca8a04; }
+    .word-c-even { background: #eff6ff; border-bottom: 2px solid #93c5fd; }
+    .word-c-odd { background: #f0fdf4; border-bottom: 2px solid #86efac; }
+    .word-seam { background: #fef3c7; border-bottom: 2px solid #f59e0b; font-weight: 500; }
+    
+    /* Seam Marker Divider */
+    .seam-divider { display: block; margin: 12px 0; padding: 4px 8px; background: #fffbeb; border: 1px dashed #f59e0b; border-radius: 4px; font-size: 0.78rem; font-family: monospace; color: #b45309; text-align: center; }
+
+    /* Tooltip */
+    #tooltip { position: fixed; display: none; background: #1e293b; color: white; padding: 6px 10px; border-radius: 4px; font-size: 0.78rem; font-family: monospace; z-index: 1000; pointer-events: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>Transcript Timing Reconciler</h1>
+        <div class="subtitle">Courtroom Caption Pipeline &bull; Out-of-Order Overlap Reassembly Engine</div>
+      </div>
+      <div>
+        <span id="conn-badge" class="status-badge state-disconnected">DISCONNECTED</span>
+      </div>
+    </header>
+
+    <div class="dashboard-grid">
+      <!-- Left Column: Socket Link & Controls -->
+      <aside>
+        <!-- Real-Time Socket Connection Panel -->
+        <div class="card">
+          <div class="card-title">TCP Socket Connection</div>
+          <div class="metric-row">
+            <span class="metric-label">Status:</span>
+            <span id="link-state" class="metric-val">DISCONNECTED</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Server Port:</span>
+            <span class="metric-val">TCP 127.0.0.1:9000</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Active Feeder:</span>
+            <span id="feeder-addr" class="metric-val">None</span>
+          </div>
+          <div class="metric-row" style="flex-direction: column; align-items: flex-start; margin-top: 4px;">
+            <span class="metric-label" style="font-size: 0.75rem;">Status Message:</span>
+            <span id="event-msg" style="font-size: 0.8rem; color: #334155; word-break: break-word;">Waiting for feeder...</span>
+          </div>
+          <div class="metric-row" style="flex-direction: column; align-items: flex-start; margin-top: 6px;">
+            <span class="metric-label" style="font-size: 0.75rem;">Feeder Output Log:</span>
+            <div id="feeder-log-box" style="font-size: 0.72rem; font-family: monospace; color: #475569; background: #f8fafc; border: 1px solid var(--border); border-radius: 4px; padding: 6px; width: 100%; max-height: 85px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;">No feeder process logs yet.</div>
+          </div>
+        </div>
+
+        <!-- System Controls -->
+        <div class="card">
+          <div class="card-title">Reviewer Controls</div>
+          <div class="control-group">
+            <label class="control-label" for="feed-delay">Feeder Speed (delay / chunk):</label>
+            <select id="feed-delay">
+              <option value="0.04" selected>Normal Stream (40ms / chunk)</option>
+              <option value="0.01">Fast Stream (10ms / chunk)</option>
+              <option value="0.00">Instant Batch (0ms)</option>
+            </select>
+          </div>
+          <button id="btn-start-feeder" class="btn btn-primary" onclick="startFeeder()">&#9654; Start Feeder (Process)</button>
+          
+          <div class="control-group" style="margin-top: 10px;">
+            <label class="control-label" for="policy-select">Seam Bias Policy:</label>
+            <select id="policy-select" onchange="updatePolicy()">
+              <option value="anti-duplication" selected>Anti-Duplication (Defended Policy)</option>
+              <option value="anti-drop">Anti-Drop (Aggressive Retention)</option>
+            </select>
+            <span style="font-size: 0.72rem; color: var(--text-muted); display: block; margin-top: 2px;">
+              *Court Reporter Standard: strictly prevents phantom repeated words at seams.
+            </span>
+          </div>
+
+          <button id="btn-reset" class="btn btn-danger" onclick="resetReconciler()" style="margin-top: 10px;">Reset Reconciler</button>
+        </div>
+
+        <!-- Live Reconciliation Metrics -->
+        <div class="card">
+          <div class="card-title">Reconciliation Metrics</div>
+          
+          <div class="metric-row">
+            <span class="metric-label">Chunks Received:</span>
+            <span class="metric-val"><span id="chunks-curr">0</span> / <span id="chunks-total">--</span></span>
+          </div>
+          <div class="progress-bar"><div id="chunks-progress" class="progress-fill"></div></div>
+
+          <div class="metric-row">
+            <span class="metric-label">Seams Resolved:</span>
+            <span class="metric-val"><span id="seams-curr">0</span> / <span id="seams-total">--</span></span>
+          </div>
+          <div class="progress-bar"><div id="seams-progress" class="progress-fill" style="background:#16a34a;"></div></div>
+
+          <div class="metric-row">
+            <span class="metric-label">Packets Processed:</span>
+            <span id="packets-total" class="metric-val">0</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">ASR Failures Handled:</span>
+            <span id="chunks-failed" class="metric-val" style="color:var(--danger)">0</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Duplicates Filtered:</span>
+            <span id="duplicates-ignored" class="metric-val" style="color:var(--warning)">0</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Seam Words Aligned:</span>
+            <span id="words-aligned" class="metric-val">0</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Echoes Suppressed:</span>
+            <span id="words-suppressed" class="metric-val">0</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Total Reconciled Words:</span>
+            <span id="words-total" class="metric-val" style="color:var(--primary); font-size:1rem;">0</span>
+          </div>
+        </div>
+
+        <!-- Legend -->
+        <div class="card" style="font-size: 0.8rem; color: var(--text-muted);">
+          <div class="card-title" style="font-size: 0.85rem;">Transcript Legend</div>
+          <div><span style="background:#eff6ff; border-bottom:2px solid #93c5fd; padding:1px 4px; border-radius:3px;">Word</span> Even Chunk</div>
+          <div style="margin-top:4px;"><span style="background:#f0fdf4; border-bottom:2px solid #86efac; padding:1px 4px; border-radius:3px;">Word</span> Odd Chunk</div>
+          <div style="margin-top:4px;"><span style="background:#fef3c7; border-bottom:2px solid #f59e0b; padding:1px 4px; border-radius:3px; font-weight:500;">Word</span> Reconciled Seam Word</div>
+          <div style="margin-top:6px; font-size: 0.75rem;">*Hover over any word to inspect timestamp & chunk ID.</div>
+        </div>
+      </aside>
+
+      <!-- Right Column: Live Reconciled Transcript -->
+      <main class="transcript-container">
+        <div class="card" style="flex:1; display:flex; flex-direction:column; margin-bottom:0;">
+          <div class="transcript-header">
+            <div>
+              <span style="font-weight:700; font-size:1.1rem;">Live Reconciled Transcript</span>
+              <span id="stream-summary" style="font-size:0.85rem; color:var(--text-muted); margin-left:12px;">(Waiting for stream...)</span>
+            </div>
+            <div>
+              <label style="font-size:0.85rem; cursor:pointer;">
+                <input type="checkbox" id="auto-scroll" checked> Auto-Scroll
+              </label>
+            </div>
+          </div>
+          <div id="transcript-view" class="transcript-body">
+            <div id="empty-notice" style="color:#94a3b8; text-align:center; padding-top:60px;">
+              No transcript chunks received yet.<br>Click <strong>Start Feeder</strong> or run <code>python feeder.py</code> in terminal to begin.
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div id="tooltip"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
